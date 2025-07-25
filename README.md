@@ -15,7 +15,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Twitter Follow](https://img.shields.io/twitter/follow/OceansSN66?style=social)](https://twitter.com/OceansSN66)
 
-🌐 [Website](https://oceans66.com) • ⛏️ [Mining Guide](docs/miner.md) • 🧑‍🏫 [Validator Guide](docs/validator.md)
+🌐 [Whitepaper](https://oceans66.com/whitepaper/introduction) • ⛏️ [Mining Guide](docs/miner.md) • 🧑‍🏫 [Validator Guide](docs/validator.md)
 
 </div>
 
@@ -155,3 +155,4 @@ We're introducing **gamification features** on the subnet—holders will be able
 - **Discord**: [Join our community](https://discord.gg/bittensor)
 - **Twitter**: [@OceansSN66](https://twitter.com/OceansSN66)
 - **GitHub**: [OceansSN66](https://github.com/OceansSN66)
+- **Whitepaper**: [Read the full whitepaper](https://oceans66.com/whitepaper/introduction)
