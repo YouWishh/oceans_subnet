@@ -86,7 +86,3 @@ pm2 stop     oceans_validator
 Thanks to the Bittensor core team and every operator striving for transparent, community‑driven liquidity. Together we keep the **oceans** deep, clear, and fair.
 
 _Secure validating!_ 🛡️
-
-```
-
-```
