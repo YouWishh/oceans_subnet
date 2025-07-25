@@ -1,0 +1,17 @@
+venv/
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.vscode
+.hypothesis
+.pytest_cache
+local/
+liquidity_env/*
+validator_env/*
+Oceans
+*.egg-info/
+*.egg
