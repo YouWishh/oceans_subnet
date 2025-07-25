@@ -1,4 +1,3 @@
-````markdown
 # 🌊 Oceans Subnet 66 • Validator Guide (v0)
 
 **Last updated:** July 2025  
@@ -21,7 +20,6 @@ chmod +x scripts/validator/install_dependencies.sh
 chmod +x scripts/validator/setup.sh
 ./scripts/validator/setup.sh
 ```
-````
 
 ---
 
