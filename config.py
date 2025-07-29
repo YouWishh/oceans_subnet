@@ -29,10 +29,7 @@ DECIMALS = 10**9
 SAMPLE_POINTS = 10
 
 # ── Validator specific  ───────────────────────────────────────────────
-VOTE_API_ENDPOINT: AnyUrl | str = Field(
-    "TODO",    # ← To be filled
-    env="VOTE_API_ENDPOINT",
-)
+
 
 # ──────────────────────────────────────────────────────────────
 # 1. Settings object (use everywhere instead of os.getenv)
@@ -53,7 +50,8 @@ class _Settings(BaseSettings):
 
     # --- Validator specific ------------------------------------------------------
     VOTE_API_ENDPOINT: AnyUrl | str = Field(
-        "https://api.oceans66.com/v1", env="VOTE_API_ENDPOINT"
+    "TODO",    # ← To be filled
+    env="VOTE_API_ENDPOINT",
     )
     VOTE_POLL_INTERVAL: int = Field(
         30, env="VOTE_POLL_INTERVAL"
