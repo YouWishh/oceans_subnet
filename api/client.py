@@ -1,16 +1,16 @@
 """
 Typed synchronous client for the Oceans vote API.
 
-If `config.settings.VOTE_API_ENDPOINT` is left at its default value
+If ``config.settings.VOTE_API_ENDPOINT`` is left at its default value
 ("TODO"), the client operates in **offline mode** and returns a small,
-deterministic set of dummy votes so the rest of the codebase keeps
+deterministic set of *temporal* votes so the rest of the codebase keeps
 working while the real service is unavailable.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Set
 
 import backoff
 import httpx
@@ -20,28 +20,40 @@ from .schemas import Vote
 
 log = logging.getLogger("vote_api_client")
 
-# ── Hard‑coded dummy data ────────────────────────────────────────────────
-_DUMMY_VOTER_HOTKEYS: List[str] = [
+# ── Hard‑coded temporal data ─────────────────────────────────────────────
+_TEMPORAL_VOTER_HOTKEYS: List[str] = [
     "5HdK1zyMbMoq1NM2sDL2Len9h2CsmBcVbrFthePccMN5R8jU",
     "5CdG8JDyzBPvXD1PM3ctdVmk3DbC52aTmYbQNezasVUXsn66",
     "5CsvRJXuR955WojnGMdok1hbhffZyB4N5ocrv82f3p5A2zVp",
     "5ExiuLNctkEUL5xMijujmAdhJGdzb5d6vxdzLdjpH3MLNovF",
 ]
-_DUMMY_BLOCK_HEIGHT: int = 6073385
-_DUMMY_WEIGHTS: Dict[int, float] = {i: 1 / 128 for i in range(1, 129)}
+
+_TEMPORAL_BLOCK_HEIGHT: int = 6_073_385  # Same deterministic height
+
+# Inactive / unknown subnets (excluded from weighting)
+_INACTIVE_SUBNETS: Set[int] = {
+    15, 46, 67, 69, 74, 78, 82, 83, 95, 100,
+    101, 104, 110, 112, 115, 116, 117, 118, 119, 120,
+}
+
+_ACTIVE_SUBNETS: List[int] = [i for i in range(1, 129) if i not in _INACTIVE_SUBNETS]
+_SUBNET_WEIGHT: float = 1 / len(_ACTIVE_SUBNETS)  # Equal share across active subnets
+
+_TEMPORAL_WEIGHTS: Dict[int, float] = {i: _SUBNET_WEIGHT for i in _ACTIVE_SUBNETS}
+
 _OFFLINE_SENTINEL = "TODO"
 
 
 class VoteAPIClient:
     """
-    Minimal wrapper around :pyclass:`httpx.Client` with automatic retries.
+    Minimal wrapper around :class:`httpx.Client` with automatic retries.
 
-    • **Online mode**  – `settings.VOTE_API_ENDPOINT` is a real URL; HTTP
-      calls are made as usual.
+    • **Online mode**  – ``settings.VOTE_API_ENDPOINT`` is a real URL;
+      HTTP calls are made as usual.
 
-    • **Offline mode** – `settings.VOTE_API_ENDPOINT` is `"TODO"`; the
-      client returns deterministic dummy data instead of performing any
-      network I/O.
+    • **Offline mode** – ``settings.VOTE_API_ENDPOINT`` is "TODO"; the
+      client returns deterministic **temporal** votes instead of
+      performing any network I/O.
     """
 
     DEFAULT_TIMEOUT = 10.0
@@ -58,7 +70,7 @@ class VoteAPIClient:
         if self._offline:
             log.warning(
                 "VoteAPIClient initialised in **offline** mode – "
-                "returning dummy votes until a real endpoint is configured"
+                "returning *temporal* votes until a real endpoint is configured"
             )
         else:
             self._client = httpx.Client(base_url=self.base_url, timeout=self.timeout)
@@ -68,7 +80,7 @@ class VoteAPIClient:
         if self._client is not None:
             self._client.close()
 
-    # Enable use with the ``with`` statement
+    # Enable use with the `with` statement
     def __enter__(self) -> "VoteAPIClient":
         return self
 
@@ -85,11 +97,11 @@ class VoteAPIClient:
         """
         Return the most recent vote‑vector per voter.
 
-        * **Online mode** – GET ``/votes/latest`` from the configured API.
-        * **Offline mode** – return hard‑coded votes defined above.
+        * **Online mode** – ``GET /votes/latest`` from the configured API.
+        * **Offline mode** – return deterministic *temporal* votes.
         """
         if self._offline:
-            return self._generate_dummy_votes()
+            return self._generate_temporal_votes()
 
         assert (
             self._client is not None
@@ -110,17 +122,21 @@ class VoteAPIClient:
     # Internal helpers
     # ────────────────────────────────────────────────────────
     @staticmethod
-    def _generate_dummy_votes() -> List[Vote]:
+    def _generate_temporal_votes() -> List[Vote]:
         """
-        Build a deterministic set of :class:`Vote` objects used in offline mode.
+        Build a deterministic set of :class:`Vote` objects used in
+        offline mode.
+
+        • Subnet weights are distributed *equally* across all *active*
+          subnets (those **not** in ``_INACTIVE_SUBNETS``).
         """
         now = datetime.now(timezone.utc)
         return [
             Vote(
                 voter_hotkey=hk,
-                block_height=_DUMMY_BLOCK_HEIGHT,
-                weights=_DUMMY_WEIGHTS,
+                block_height=_TEMPORAL_BLOCK_HEIGHT,
+                weights=_TEMPORAL_WEIGHTS,
                 timestamp=now,
             )
-            for hk in _DUMMY_VOTER_HOTKEYS
+            for hk in _TEMPORAL_VOTER_HOTKEYS
         ]
