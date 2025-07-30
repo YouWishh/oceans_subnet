@@ -25,7 +25,26 @@ from validator.state_cache import StateCache
 from validator.vote_fetcher import VoteFetcher
 from validator.liquidity_fetcher import LiquidityFetcher
 from validator.rewards import RewardCalculator      
-from validator.forward import forward               
+from validator.forward import forward      
+
+import logging
+
+class _HidePortableRegistryNoise(logging.Filter):
+    _needle = "Adding PortableRegistry from metadata to type registry"
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
+        return self._needle not in record.getMessage()
+
+# Attach the filter only to the substrate / codec loggers
+for noisy_pkg in ("substrateinterface", "scalecodec"):
+    logging.getLogger(noisy_pkg).addFilter(_HidePortableRegistryNoise())
+# ---------------------------------------------------------------------------
+
+# ── normal imports follow ─────────────────────────────────────────────────
+import asyncio
+import traceback
+import time
+
 # ──────────────────────────────────────────────────────────────────────
 # Epoch‑aware mix‑in
 # ──────────────────────────────────────────────────────────────────────
