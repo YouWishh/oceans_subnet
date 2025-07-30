@@ -12,6 +12,7 @@ Key features
 
 import asyncio
 import traceback
+import time
 from datetime import datetime
 from typing import Optional, Tuple
 
@@ -187,3 +188,11 @@ class EpochValidatorNeuron(BaseValidatorNeuron):
         except KeyboardInterrupt:
             getattr(self, "axon", bt.logging).stop()
             bt.logging.success("Validator stopped by keyboard interrupt.")
+
+if __name__ == "__main__":
+    # This is Validator Entrypoint
+
+    with EpochValidatorNeuron() as validator:
+        while True:
+            bt.logging.info(f"Validator running... {time.time()}")
+            time.sleep(5)
