@@ -23,7 +23,7 @@ class Vote(BaseModel):
 
     # Amount of stake held by the voter
     voter_stake: float = Field(
-        ..., alias="alpha_stake", ge=0, description="α‑Stake held by voter"
+        ..., alias="voter_stake", ge=0, description="α‑Stake held by voter"
     )
 
     weights: Dict[int, float] = Field(
