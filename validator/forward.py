@@ -1,8 +1,8 @@
 """
 Validator‑side *business logic* executed once at every epoch head.
 
-This file is deliberately kept free of any bittensor‑specific
-subclassing to make unit‑testing easier.
+This file is deliberately kept free of any bittensor‑specific subclassing
+to make unit‑testing easier.
 
 The public coroutine `forward()` is imported and called by
 `EpochValidatorNeuron.forward()` in `validator/epoch_validator.py`.
@@ -10,13 +10,14 @@ The public coroutine `forward()` is imported and called by
 
 from typing import Dict
 
-import torch
+import numpy as np
 import bittensor as bt
 
 
-async def forward(neuron) -> torch.FloatTensor:
+async def forward(neuron) -> None:
     """
-    Compute and return the normalised weight tensor for the current epoch.
+    Compute miner‑score vector for the current epoch and store it on the
+    running validator (`neuron`) via `neuron.update_scores()`.
 
     Parameters
     ----------
@@ -24,35 +25,39 @@ async def forward(neuron) -> torch.FloatTensor:
         The running validator instance.  It exposes:
             • vote_fetcher, liq_fetcher, reward_calc
             • metagraph (with `.uids`)
-            • any other attributes you may want to use later.
-
-    Returns
-    -------
-    torch.FloatTensor
-        A 1‑D tensor of length `len(neuron.metagraph.uids)` whose entries
-        sum to 1.0.  The order **must** match `metagraph.uids`.
+            • update_scores(boosted: np.ndarray, uids_np: np.ndarray)
     """
     # 1️⃣  Ingest fresh data ----------------------------------------------------
+    bt.logging.info("[forward] Fetching latest on‑chain and off‑chain data…")
     neuron.vote_fetcher.fetch_and_store()
     neuron.liq_fetcher.fetch_and_store()
 
-    # 2️⃣  Compute per‑miner weights -------------------------------------------
-    uid_weights: Dict[int, float] = neuron.reward_calc.compute(
+    # 2️⃣  Compute per‑miner raw scores ----------------------------------------
+    bt.logging.info("[forward] Computing raw miner scores…")
+    uid_scores: Dict[int, float] = neuron.reward_calc.compute(
         metagraph=neuron.metagraph
     )
 
-    # 3️⃣  Convert {uid: w} → tensor in metagraph order -------------------------
-    tensor = torch.zeros(len(neuron.metagraph.uids), dtype=torch.float32)
-    for uid, weight in uid_weights.items():
-        if 0 <= uid < tensor.shape[0]:
-            tensor[uid] = float(weight)
+    # 3️⃣  Convert {uid: score} → numpy arrays in metagraph order --------------
+    num_uids: int = len(neuron.metagraph.uids)
+    boosted       = np.zeros(num_uids, dtype=np.float32)
+    uids_np       = np.asarray(neuron.metagraph.uids, dtype=np.int64)
 
-    # 4️⃣  Normalise so Σw = 1.0  (fallback = uniform) --------------------------
-    total = tensor.sum()
-    if total > 0:
-        tensor /= total
+    for uid, score in uid_scores.items():
+        if 0 <= uid < num_uids:
+            boosted[uid] = float(score)
+
+    # 4️⃣  Normalise so Σscores = 1.0  (fallback = uniform) --------------------
+    total: float = float(boosted.sum(dtype=np.float32))
+    if total > 0.0:
+        boosted /= total
     else:
-        tensor += 1.0 / tensor.numel()
+        boosted.fill(1.0 / num_uids)
 
-    bt.logging.debug(f"[forward] produced weight vector of shape {tensor.shape}")
-    return tensor
+    bt.logging.info(
+        f"[forward] Normalised scores for {num_uids} miners (Σ = {boosted.sum():.6f})."
+    )
+
+    # 5️⃣  Persist the scores on the neuron object -----------------------------
+    bt.logging.info("[forward] Updating neuron's score table…")
+    neuron.update_scores(boosted, uids_np)
