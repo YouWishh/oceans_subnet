@@ -10,7 +10,7 @@
 ```bash
 # Clone the repository
 git clone https://github.com/Oceans-Subnet/oceans_subnet
-cd oceans66
+cd oceans_subnet
 
 # Install general system dependencies
 chmod +x scripts/validator/install_dependencies.sh
