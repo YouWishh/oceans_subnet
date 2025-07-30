@@ -9,8 +9,7 @@ RPC calls when nothing changed.
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import List
 
 from sqlalchemy.orm import Session
 

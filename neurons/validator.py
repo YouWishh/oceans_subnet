@@ -16,12 +16,10 @@ from datetime import datetime
 from typing import Optional, Tuple
 
 import bittensor as bt
-import torch
 from bittensor import BLOCKTIME
 
 from base.validator import BaseValidatorNeuron
 
-from config import settings
 from validator.state_cache import StateCache
 from validator.vote_fetcher import VoteFetcher
 from validator.liquidity_fetcher import LiquidityFetcher
