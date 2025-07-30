@@ -30,15 +30,28 @@ _TEMPORAL_VOTER_HOTKEYS: List[str] = [
 _TEMPORAL_BLOCK_HEIGHT: int = 6_073_385  # deterministic height
 _TEMPORAL_STAKE: float = 1.0             # every temporal voter gets 1 α
 
-# Inactive / unknown subnets (excluded from weighting)
+# Inactive / unknown subnets (kept for reference – currently unused)
 _INACTIVE_SUBNETS: Set[int] = {
     15, 46, 67, 69, 74, 78, 82, 83, 95, 100,
     101, 104, 110, 112, 115, 116, 117, 118, 119, 120,
 }
 
-_ACTIVE_SUBNETS: List[int] = [i for i in range(1, 129) if i not in _INACTIVE_SUBNETS]
-_SUBNET_WEIGHT: float = 1 / len(_ACTIVE_SUBNETS)  # equal share across active subnets
-_TEMPORAL_WEIGHTS: Dict[int, float] = {i: _SUBNET_WEIGHT for i in _ACTIVE_SUBNETS}
+# Subnets that currently have user‑supplied liquidity
+ENABLED_USER_LIQUIDITY: Set[int] = {10,27,36,51,73,85,87,97,102,104,106}
+
+# ── NEW LOGIC ────────────────────────────────────────────────────────────
+# Active subnets are **only** those with user liquidity.  The legacy
+# _INACTIVE_SUBNETS list is left untouched for now in case it is needed
+# elsewhere later.
+ACTIVE_SUBNETS: List[int] = sorted(ENABLED_USER_LIQUIDITY)
+
+if not ACTIVE_SUBNETS:
+    raise ValueError(
+        "ENABLED_USER_LIQUIDITY is empty – at least one subnet must be enabled."
+    )
+
+_SUBNET_WEIGHT: float = 1 / len(ACTIVE_SUBNETS)  # equal share across active subnets
+_TEMPORAL_WEIGHTS: Dict[int, float] = {i: _SUBNET_WEIGHT for i in ACTIVE_SUBNETS}
 
 _OFFLINE_SENTINEL = "TODO"
 

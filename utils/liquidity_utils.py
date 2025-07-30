@@ -1,29 +1,29 @@
 """
 Async helpers for fetching liquidity positions on Bittensor subnets.
+
+Only subnets listed in ``api.client.ACTIVE_SUBNETS`` are queried.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
-import bittensor as bt                              # ← NEW logging
+import bittensor as bt
 from bittensor import AsyncSubtensor
 from bittensor.utils.liquidity import LiquidityPosition
 
+# -------------------------------------------------------------------- #
+# Imports from local modules
+# -------------------------------------------------------------------- #
+from api.client import ACTIVE_SUBNETS                 # ← NEW
 from utils.subnet_utils import get_metagraph
 
 # -------------------------------------------------------------------- #
 # Config & logging
 # -------------------------------------------------------------------- #
-_SOURCE_NETUID = 66
-_INACTIVE_SUBNETS: Set[int] = {
-    0,  # ALWAYS exclude 0
-    15, 46, 67, 69, 74, 78, 82, 83, 95, 100,
-    101, 104, 110, 112, 115, 116, 117, 118, 119, 120,
-}
-
+_SOURCE_NETUID = 66  # used only to discover coldkeys
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(message)s",
@@ -77,39 +77,6 @@ class _StubWallet:
         return _StubPublicKey(self._cold_ss58)
 
 # -------------------------------------------------------------------- #
-# Internal helpers
-# -------------------------------------------------------------------- #
-async def _discover_subnets(st: AsyncSubtensor) -> List[int]:
-    """
-    Return a **sorted** list of all active subnet IDs, excluding those
-    in `_INACTIVE_SUBNETS`.
-    """
-    candidates: List[int] = []
-    if hasattr(st, "get_subnets"):
-        try:
-            subnets = await st.get_subnets()  # type: ignore[arg-type]
-            candidates = [int(x) for x in subnets]
-        except Exception as err:  # noqa: BLE001
-            logger.debug("get_subnets() failed: %s", err)
-
-    if not candidates:
-        for attr in ("subnet_count", "get_subnet_count"):
-            if hasattr(st, attr):
-                try:
-                    count = await getattr(st, attr)()  # type: ignore[misc]
-                    candidates = list(range(int(count)))
-                    break
-                except Exception as err:  # noqa: BLE001
-                    logger.debug("%s() failed: %s", attr, err)
-
-    active = sorted(uid for uid in candidates if uid not in _INACTIVE_SUBNETS)
-    bt.logging.info(
-        f"[liquidity_utils] Discovered {len(active)} active subnets "
-        f"(excluded {_INACTIVE_SUBNETS})"
-    )
-    return active
-
-# -------------------------------------------------------------------- #
 # Public API
 # -------------------------------------------------------------------- #
 async def fetch_subnet_liquidity_positions(
@@ -121,8 +88,22 @@ async def fetch_subnet_liquidity_positions(
     logprogress: bool = True,
 ) -> List[LiquiditySubnet]:
     """
-    Retrieve liquidity positions.  Excludes subnet 0 and any IDs in
-    `_INACTIVE_SUBNETS`.
+    Retrieve liquidity positions for subnets in ``api.client.ACTIVE_SUBNETS``.
+
+    Parameters
+    ----------
+    subtensor:
+        An initialised :class:`bittensor.AsyncSubtensor` instance.
+    netuid:
+        If provided, query **only** this subnet.  The subnet must be in
+        ``ACTIVE_SUBNETS``; otherwise the call returns an empty list and logs
+        a warning.
+    block:
+        Specific block height to query.  ``None`` means *latest*.
+    max_concurrency:
+        Maximum number of concurrent coldkey queries per subnet.
+    logprogress:
+        If *True*, prints a progress message before each subnet is fetched.
     """
     # 0️⃣  Load coldkeys once from the SOURCE subnet ----------------------
     metagraph_src = await get_metagraph(
@@ -136,14 +117,15 @@ async def fetch_subnet_liquidity_positions(
 
     # 1️⃣  Decide which subnets to query ---------------------------------
     if netuid is None:
-        targets = await _discover_subnets(subtensor)
+        targets: List[int] = sorted(ACTIVE_SUBNETS)
     else:
-        if netuid in _INACTIVE_SUBNETS:
-            bt.logging.warning(f"[liquidity_utils] Subnet {netuid} is inactive – skipping")
+        if netuid not in ACTIVE_SUBNETS:
+            bt.logging.warning(
+                f"[liquidity_utils] Subnet {netuid} is not in ACTIVE_SUBNETS – skipping"
+            )
             return []
         targets = [netuid]
 
-    # 2️⃣  Convenience logger -------------------------------------------
     bt.logging.info(f"[liquidity_utils] Querying subnets: {targets}")
 
     # Helper: query a single subnet
@@ -153,7 +135,9 @@ async def fetch_subnet_liquidity_positions(
 
         semaphore = asyncio.Semaphore(max_concurrency)
 
-        async def _query_single_ck(cold_ss58: str) -> Tuple[str, List[LiquidityPosition]]:
+        async def _query_single_ck(
+            cold_ss58: str,
+        ) -> Tuple[str, List[LiquidityPosition]]:
             async with semaphore:
                 wallet_stub = _StubWallet(cold_ss58)
                 try:
@@ -170,20 +154,23 @@ async def fetch_subnet_liquidity_positions(
                     )
                     return cold_ss58, positions
                 except Exception as err:  # noqa: BLE001
-                    logger.warning("[%s] error fetching positions: %s", cold_ss58[:6], err)
+                    logger.warning(
+                        "[%s] error fetching positions: %s", cold_ss58[:6], err
+                    )
                     return cold_ss58, []
 
         tasks = [_query_single_ck(ck) for ck in src_coldkeys]
         results = await asyncio.gather(*tasks)
         return LiquiditySubnet(uid, {ck: pos for ck, pos in results})
 
-    # 3️⃣  Fan‑out over all targets --------------------------------------
+    # 2️⃣  Fan‑out over all targets --------------------------------------
     liquidity_subnets = []
     for uid in targets:
         ls = await _query_single_subnet(uid)
         liquidity_subnets.append(ls)
 
     bt.logging.info(
-        f"[liquidity_utils] Finished – collected liquidity for {len(liquidity_subnets)} subnets"
+        f"[liquidity_utils] Finished – collected liquidity for "
+        f"{len(liquidity_subnets)} subnet(s)"
     )
     return liquidity_subnets
