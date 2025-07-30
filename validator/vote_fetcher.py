@@ -127,6 +127,7 @@ class VoteFetcher:
             )
         else:
             bt.logging.debug("[VoteFetcher] No new vote snapshots to persist")
+        self.cache.latest_votes = snapshots
 
         # 6️⃣  Debug preview -------------------------------------------------
         preview = [
