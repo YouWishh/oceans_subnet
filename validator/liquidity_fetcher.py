@@ -1,19 +1,16 @@
 """
-Validator‑side helper that pulls liquidity data from the chain, converts it
+Validator‑side helper that pulls liquidity data from chain, converts it
 into storage‑layer snapshots and persists only *new* records.
 
-Usage
------
->>> cache   = StateCache()
->>> fetcher = LiquidityFetcher(cache)
->>> new_liq = fetcher.fetch_and_store()          # run once per epoch
+The public method `fetch_and_store()` is now **async**, so it can be awaited
+inside the validator’s event‑loop without spawning a nested loop.
 """
-
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Dict, List, Optional, Tuple
+from collections import defaultdict
+from typing import Callable, Dict, List, Optional, Tuple, Awaitable
 
 from bittensor import AsyncSubtensor  # type: ignore
 from sqlalchemy.orm import Session
@@ -21,7 +18,6 @@ from sqlalchemy.orm import Session
 from config import settings
 from storage.models import LiquiditySnapshot
 from validator.state_cache import StateCache
-from collections import defaultdict
 from utils.liquidity_utils import (
     LiquiditySubnet,
     fetch_subnet_liquidity_positions,
@@ -32,28 +28,29 @@ log = logging.getLogger("validator.liquidity_fetcher")
 
 class LiquidityFetcher:
     """
-    Wraps the *async* helpers in `utils.liquidity_utils` with a synchronous,
+    Wraps the *async* helpers in `utils.liquidity_utils` with an async,
     validator‑friendly façade and transparent de‑duplication.
     """
 
-    # --------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     # Construction
-    # --------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     def __init__(
         self,
         cache: StateCache,
         *,
         fetch_fn: Optional[
-            Callable[..., List[LiquiditySubnet]]
-        ] = None,  # injected for unit‑tests
+            Callable[..., Awaitable[List[LiquiditySubnet]]]
+        ] = None,  # injectable for unit‑tests
     ) -> None:
         self.cache = cache
+        # If no custom function supplied, use the default async implementation
         self._fetch_fn = fetch_fn or self._default_fetch
 
-    # --------------------------------------------------------------------- #
-    # Public entry‑point
-    # --------------------------------------------------------------------- #
-    def fetch_and_store(
+    # ------------------------------------------------------------------ #
+    # PUBLIC ASYNC ENTRY‑POINT                                           #
+    # ------------------------------------------------------------------ #
+    async def fetch_and_store(
         self,
         *,
         netuid: Optional[int] = None,
@@ -65,12 +62,16 @@ class LiquidityFetcher:
         • Store only new (wallet, subnet, block) combinations  
         • Return the list of *persisted* snapshots
         """
-        liquidity_subnets: List[LiquiditySubnet] = self._fetch_fn(
-            netuid=netuid,
-            block=block,
-        )
+        # 1️⃣  Fetch -------------------------------------------------------
+        if asyncio.iscoroutinefunction(self._fetch_fn):
+            liquidity_subnets = await self._fetch_fn(netuid=netuid, block=block)
+        else:
+            # Synchronous stub – run in background thread so we don’t block
+            liquidity_subnets = await asyncio.to_thread(
+                self._fetch_fn, netuid=netuid, block=block
+            )
 
-        # 1️⃣  Flatten & aggregate USD value per wallet/subnet  -----------------
+        # 2️⃣  Flatten & aggregate USD value per wallet/subnet ------------
         aggregated: Dict[Tuple[str, int, int], float] = {}
         for ls in liquidity_subnets:
             for coldkey, positions in ls.coldkey_positions.items():
@@ -83,11 +84,11 @@ class LiquidityFetcher:
                 key = (coldkey, ls.netuid, block or 0)
                 aggregated[key] = usd_total
 
-        # 2️⃣  Convert to LiquiditySnapshot objects (dedup via DB)  -------------
+        # 3️⃣  Convert to LiquiditySnapshot objects (dedup via DB) ---------
         new_snapshots: List[LiquiditySnapshot] = []
         with self.cache._session() as db:  # pylint: disable=protected-access
             for (ck, subnet, blk), usd_val in aggregated.items():
-                if usd_val == 0.0:  # skip empty wallets
+                if usd_val == 0.0:
                     continue
                 if not self._exists(db, ck, subnet, blk):
                     new_snapshots.append(
@@ -103,27 +104,24 @@ class LiquidityFetcher:
             self.cache.persist_liquidity(new_snapshots)
 
         log.info("LiquidityFetcher stored %d new snapshots", len(new_snapshots))
-        
+
+        # 4️⃣  Build liquidity map for RewardCalculator --------------------
         liq_map: Dict[int, Dict[int, float]] = defaultdict(dict)
-        for (ck, subnet, blk), usd_val in aggregated.items():
-            # Assuming you have a reliable coldkey→uid lookup:
-            uid = self._coldkey_to_uid(ck, subnet)
+        for (ck, subnet, _blk), usd_val in aggregated.items():
+            uid = self._coldkey_to_uid(ck, subnet)  # implement as needed
             if uid is not None:
                 liq_map[subnet][uid] = usd_val
 
         self.cache.liquidity = liq_map
-
         return new_snapshots
 
-    # --------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     # Helpers
-    # --------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     def _exists(
         self, db: Session, wallet: str, subnet: int, block_height: int
     ) -> bool:
-        """
-        Quick existence test to avoid duplicate rows.
-        """
+        """Quick existence test to avoid duplicate rows."""
         return (
             db.query(LiquiditySnapshot)
             .filter_by(
@@ -135,30 +133,35 @@ class LiquidityFetcher:
             is not None
         )
 
-    # --------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     # Default async fetch implementation
-    # --------------------------------------------------------------------- #
-    def _default_fetch(
+    # ------------------------------------------------------------------ #
+    async def _default_fetch(
         self,
         *,
         netuid: Optional[int],
         block: Optional[int],
     ) -> List[LiquiditySubnet]:
         """
-        Bridges the async helper into synchronous code by running its
-        coroutine inside a private event‑loop.
+        Uses `AsyncSubtensor` + `fetch_subnet_liquidity_positions` to pull
+        on‑chain data in an async fashion.
         """
+        async with AsyncSubtensor(network=settings.BITTENSOR_NETWORK) as subtensor:
+            return await fetch_subnet_liquidity_positions(
+                subtensor,
+                netuid=netuid,
+                block=block,
+                max_concurrency=settings.MAX_CONCURRENCY,
+                logprogress=False,
+            )
 
-        async def _inner() -> List[LiquiditySubnet]:
-            async with AsyncSubtensor(
-                network=settings.BITTENSOR_NETWORK
-            ) as subtensor:
-                return await fetch_subnet_liquidity_positions(
-                    subtensor,
-                    netuid=netuid,
-                    block=block,
-                    max_concurrency=settings.MAX_CONCURRENCY,
-                    logprogress=False,
-                )
+    # ------------------------------------------------------------------ #
+    # Stub – implement wallet→uid mapping for your subnet
+    # ------------------------------------------------------------------ #
+    def _coldkey_to_uid(self, coldkey: str, subnet_id: int) -> Optional[int]:
+        """
+        Map a coldkey string to a miner UID on the given subnet.
 
-        return asyncio.run(_inner())
+        Replace with real logic; returns None when mapping is unknown.
+        """
+        return None
