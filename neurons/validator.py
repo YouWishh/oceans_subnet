@@ -26,10 +26,6 @@ from validator.vote_fetcher import VoteFetcher
 from validator.liquidity_fetcher import LiquidityFetcher
 from validator.rewards import RewardCalculator      
 from validator.forward import forward               
-import logging
-# Silence DEBUG from substrate‑related libs
-for noisy_pkg in ("substrateinterface", "scalecodec"):
-    logging.getLogger(noisy_pkg).setLevel(logging.INFO)
 # ──────────────────────────────────────────────────────────────────────
 # Epoch‑aware mix‑in
 # ──────────────────────────────────────────────────────────────────────
