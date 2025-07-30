@@ -4,7 +4,6 @@ Local persistence layer for snapshots.
 ▪ Uses SQLite (default URI comes from settings.DB_URI)
 ▪ SQLAlchemy ORM keeps things simple & type‑safe
 """
-
 from __future__ import annotations
 
 import datetime as _dt
@@ -32,7 +31,7 @@ settings = get_settings()
 _ENGINE = create_engine(
     settings.DB_URI,
     echo=False,
-    connect_args={"check_same_thread": False}  # required for SQLite multithread
+    connect_args={"check_same_thread": False},  # required for SQLite multithread
 )
 SessionLocal: sessionmaker[Session] = sessionmaker(
     autocommit=False, autoflush=False, bind=_ENGINE
@@ -57,7 +56,13 @@ class VoteSnapshot(Base):
     id: int = Column(Integer, primary_key=True, index=True)
     block_height: int = Column(Integer, nullable=False, index=True)
     voter_hotkey: str = Column(String(64), nullable=False, index=True)
-    weights: Any = Column(JSON, nullable=False)  # {subnet_id: weight, …}
+
+    # New column: stake held by the voter at that snapshot
+    voter_stake: float = Column(Float, nullable=False)
+
+    # JSON dict: {subnet_id: weight, …}
+    weights: Any = Column(JSON, nullable=False)
+
     ts: _dt.datetime = Column(
         DateTime(timezone=True), default=_dt.datetime.utcnow, nullable=False, index=True
     )

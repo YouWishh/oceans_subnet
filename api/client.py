@@ -2,9 +2,8 @@
 Typed synchronous client for the Oceans vote API.
 
 If ``config.settings.VOTE_API_ENDPOINT`` is left at its default value
-("TODO"), the client operates in **offline mode** and returns a small,
-deterministic set of *temporal* votes so the rest of the codebase keeps
-working while the real service is unavailable.
+("TODO"), the client operates in **offline mode** and returns deterministic
+*temporal* votes so the rest of the codebase keeps working.
 """
 from __future__ import annotations
 
@@ -28,7 +27,8 @@ _TEMPORAL_VOTER_HOTKEYS: List[str] = [
     "5ExiuLNctkEUL5xMijujmAdhJGdzb5d6vxdzLdjpH3MLNovF",
 ]
 
-_TEMPORAL_BLOCK_HEIGHT: int = 6_073_385  # Same deterministic height
+_TEMPORAL_BLOCK_HEIGHT: int = 6_073_385  # deterministic height
+_TEMPORAL_STAKE: float = 1.0             # every temporal voter gets 1 α
 
 # Inactive / unknown subnets (excluded from weighting)
 _INACTIVE_SUBNETS: Set[int] = {
@@ -37,8 +37,7 @@ _INACTIVE_SUBNETS: Set[int] = {
 }
 
 _ACTIVE_SUBNETS: List[int] = [i for i in range(1, 129) if i not in _INACTIVE_SUBNETS]
-_SUBNET_WEIGHT: float = 1 / len(_ACTIVE_SUBNETS)  # Equal share across active subnets
-
+_SUBNET_WEIGHT: float = 1 / len(_ACTIVE_SUBNETS)  # equal share across active subnets
 _TEMPORAL_WEIGHTS: Dict[int, float] = {i: _SUBNET_WEIGHT for i in _ACTIVE_SUBNETS}
 
 _OFFLINE_SENTINEL = "TODO"
@@ -46,21 +45,15 @@ _OFFLINE_SENTINEL = "TODO"
 
 class VoteAPIClient:
     """
-    Minimal wrapper around :class:`httpx.Client` with automatic retries.
-
-    • **Online mode**  – ``settings.VOTE_API_ENDPOINT`` is a real URL;
-      HTTP calls are made as usual.
-
-    • **Offline mode** – ``settings.VOTE_API_ENDPOINT`` is "TODO"; the
-      client returns deterministic **temporal** votes instead of
-      performing any network I/O.
+    Wrapper around :class:`httpx.Client` with automatic retries and
+    deterministic offline mode.
     """
 
     DEFAULT_TIMEOUT = 10.0
 
-    # ────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
     # Construction & teardown
-    # ────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
     def __init__(self, base_url: str | None = None, timeout: float | None = None):
         self.base_url = str(base_url or settings.VOTE_API_ENDPOINT).rstrip("/")
         self.timeout = timeout or self.DEFAULT_TIMEOUT
@@ -87,9 +80,9 @@ class VoteAPIClient:
     def __exit__(self, exc_type, exc_value, traceback) -> None:  # noqa: D401
         self.close()
 
-    # ────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
     # Public API
-    # ────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
     @backoff.on_exception(
         backoff.expo, httpx.HTTPError, max_tries=5, jitter=None, factor=2
     )
@@ -118,23 +111,21 @@ class VoteAPIClient:
         log.debug("Fetched %d votes from API", len(votes))
         return votes
 
-    # ────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
     # Internal helpers
-    # ────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
     @staticmethod
     def _generate_temporal_votes() -> List[Vote]:
         """
         Build a deterministic set of :class:`Vote` objects used in
         offline mode.
-
-        • Subnet weights are distributed *equally* across all *active*
-          subnets (those **not** in ``_INACTIVE_SUBNETS``).
         """
         now = datetime.now(timezone.utc)
         return [
             Vote(
                 voter_hotkey=hk,
                 block_height=_TEMPORAL_BLOCK_HEIGHT,
+                voter_stake=_TEMPORAL_STAKE,
                 weights=_TEMPORAL_WEIGHTS,
                 timestamp=now,
             )
