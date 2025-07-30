@@ -1,18 +1,51 @@
+#!/usr/bin/env python3
 """
-Epoch‑aware validator for **Subnet 66 – Oceans**.
-
-Key features
-------------
-• At every new epoch:
-    1.  Fetches *latest* votes (off‑chain) & liquidity (on‑chain)
-    2.  Persists snapshots via `StateCache`
-    3.  Calculates miner‑weights with `RewardCalculator`
-    4.  Pushes the weight vector on‑chain (`subtensor.set_weights`)
+Epoch‑aware validator for **Subnet 66 – Oceans**
+(with noise‑free logging).
 """
 
+# ── GLOBAL LOGGING PATCH (must be first!) ────────────────────────────────
+import logging
+
+_NOISY_LINE = "Adding PortableRegistry from metadata to type registry"
+
+
+class _HidePortableRegistryNoise(logging.Filter):
+    """Blocks only the single DEBUG line that scalecodec prints incessantly."""
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
+        return _NOISY_LINE not in record.getMessage()
+
+
+# Single filter instance reused everywhere
+_suppress_filter = _HidePortableRegistryNoise()
+
+# 1️⃣  Attach to the *root* logger immediately
+logging.getLogger().addFilter(_suppress_filter)
+
+# 2️⃣  Make sure **all future handlers** get the filter automatically
+_original_add_handler = logging.Logger.addHandler
+
+
+def _patched_add_handler(self: logging.Logger, hdlr: logging.Handler):
+    hdlr.addFilter(_suppress_filter)
+    return _original_add_handler(self, hdlr)
+
+
+logging.Logger.addHandler = _patched_add_handler
+
+# 3️⃣  Attach directly to the known noisy loggers (and their descendants)
+for _name in (
+    "scalecodec",          # parent
+    "scalecodec.base",     # real emitter
+    "substrateinterface",  # for good measure
+):
+    logging.getLogger(_name).addFilter(_suppress_filter)
+# ─────────────────────────────────────────────────────────────────────────
+
+# ── standard imports (keep them **after** the patch above) ───────────────
 import asyncio
-import traceback
 import time
+import traceback
 from datetime import datetime
 from typing import Optional, Tuple
 
@@ -20,30 +53,11 @@ import bittensor as bt
 from bittensor import BLOCKTIME
 
 from base.validator import BaseValidatorNeuron
-
 from validator.state_cache import StateCache
 from validator.vote_fetcher import VoteFetcher
 from validator.liquidity_fetcher import LiquidityFetcher
-from validator.rewards import RewardCalculator      
-from validator.forward import forward      
-
-import logging
-
-class _HidePortableRegistryNoise(logging.Filter):
-    _needle = "Adding PortableRegistry from metadata to type registry"
-
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
-        return self._needle not in record.getMessage()
-
-# Attach the filter only to the substrate / codec loggers
-for noisy_pkg in ("substrateinterface", "scalecodec"):
-    logging.getLogger(noisy_pkg).addFilter(_HidePortableRegistryNoise())
-# ---------------------------------------------------------------------------
-
-# ── normal imports follow ─────────────────────────────────────────────────
-import asyncio
-import traceback
-import time
+from validator.rewards import RewardCalculator
+from validator.forward import forward
 
 # ──────────────────────────────────────────────────────────────────────
 # Epoch‑aware mix‑in
@@ -126,7 +140,7 @@ class EpochValidatorNeuron(BaseValidatorNeuron):
     # **LOGIC** – runs once each epoch
     # ---------------------------------------------------- #
     async def forward(self):
-        return await forward(self)  
+        return await forward(self)
 
     # ---------------------------------------------------- #
     # Main loop (patched)
@@ -156,7 +170,7 @@ class EpochValidatorNeuron(BaseValidatorNeuron):
 
                     self._bootstrapped = True
 
-                # Status banner every few blocks ----------------------- #d
+                # Status banner every few blocks ----------------------- #
                 next_head = start + ep_len
                 into = blk - start
                 left = max(1, next_head - blk)
@@ -206,9 +220,11 @@ class EpochValidatorNeuron(BaseValidatorNeuron):
             getattr(self, "axon", bt.logging).stop()
             bt.logging.success("Validator stopped by keyboard interrupt.")
 
-if __name__ == "__main__":
-    # This is Validator Entrypoint
 
+# ──────────────────────────────────────────────────────────────────────────
+# Entrypoint
+# ──────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
     with EpochValidatorNeuron() as validator:
         while True:
             bt.logging.info(f"Validator running... {time.time()}")
