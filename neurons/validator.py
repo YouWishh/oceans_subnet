@@ -166,7 +166,7 @@ class EpochValidatorNeuron(BaseValidatorNeuron):
                         self.sync()
                         await self.concurrent_forward()
                     except Exception as e:
-                        bt.logging.error(f"bootstrap forward failed: {e}")
+                        logging.exception("bootstrap forward failed")
 
                     self._bootstrapped = True
 
