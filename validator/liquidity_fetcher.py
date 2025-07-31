@@ -2,8 +2,7 @@
 Validator‑side helper that pulls liquidity data from chain, converts it
 into storage‑layer snapshots and persists only *new* records.
 
-`fetch_and_store()` is **async** and can be awaited inside the validator’s
-event loop without spawning a nested loop.
+All amounts are denominated in **TAO**.
 """
 from __future__ import annotations
 
@@ -24,34 +23,31 @@ from utils.liquidity_utils import (
     LiquiditySubnet,
     fetch_subnet_liquidity_positions,
 )
-from utils.subnet_utils import get_metagraph     # ← used for the UID lookup
+from utils.subnet_utils import get_metagraph     # metagraph helper
 
 log = logging.getLogger("validator.liquidity_fetcher")
 
 
 class LiquidityFetcher:
     """
-    Wraps the *async* helpers in `utils.liquidity_utils` with an async,
-    validator‑friendly façade and transparent de‑duplication.
+    Fetches on‑chain liquidity, stores snapshots, and updates
+    `cache.liquidity` in the shape that `RewardCalculator` expects:
 
-    All amounts are denominated in **TAO** (not USD).
+        cache.liquidity = { subnet_id: { uid: tao_value, … }, … }
     """
 
-    # ------------------------------------------------------------------ #
-    # Construction
-    # ------------------------------------------------------------------ #
     def __init__(
         self,
         cache: StateCache,
         *,
         fetch_fn: Optional[
             Callable[..., Awaitable[List[LiquiditySubnet]]]
-        ] = None,
+        ] = None,   # injectable in unit‑tests
     ) -> None:
         self.cache = cache
         self._fetch_fn = fetch_fn or self._default_fetch
 
-        # Local LRU‑ish cache: (coldkey, subnet) → uid
+        # LR‑style cache: (coldkey, subnet) → uid
         self._ck_uid_cache: Dict[Tuple[str, int], Optional[int]] = {}
 
     # ------------------------------------------------------------------ #
@@ -63,19 +59,13 @@ class LiquidityFetcher:
         netuid: Optional[int] = None,
         block: Optional[int] = None,
     ) -> List[LiquiditySnapshot]:
-        """
-        • Collect liquidity from chain  
-        • Aggregate TAO value per (wallet, subnet)  
-        • Store only new (wallet, subnet, block) combinations  
-        • Return the list of *persisted* snapshots
-        """
         if netuid == 0:
             bt.logging.warning("[LiquidityFetcher] Ignoring request for subnet 0")
             return []
 
         bt.logging.info(f"[LiquidityFetcher] Fetching liquidity (netuid={netuid})…")
 
-        # 1️⃣  Fetch liquidity objects ------------------------------------
+        # 1️⃣  Download liquidity ----------------------------------------
         if asyncio.iscoroutinefunction(self._fetch_fn):
             liquidity_subnets = await self._fetch_fn(netuid=netuid, block=block)
         else:
@@ -88,18 +78,22 @@ class LiquidityFetcher:
             f"LiquiditySubnet objects"
         )
 
-        # 2️⃣  Ensure we have coldkey→uid maps for every subnet -----------
+        # 2️⃣  Make sure UID cache covers every (ck, subnet) pair ---------
         await self._populate_uid_cache(liquidity_subnets, block=block)
 
-        # 3️⃣  Flatten & aggregate TAO value per wallet/subnet ------------
+        # 3️⃣  Aggregate TAO by coldkey & subnet -------------------------
         aggregated: Dict[Tuple[str, int, int], float] = {}
 
         def _balance_to_tao(bal: Balance) -> float:
-            if hasattr(bal, "tao"):
-                return float(bal.tao)
-            if hasattr(bal, "rao"):
-                return float(bal.rao) / 1e9
-            return float(bal)
+            # Safe conversion no matter how Balance is implemented
+            try:
+                return float(bal)            # Balance.__float__ → tao
+            except Exception:
+                if hasattr(bal, "tao"):
+                    return float(bal.tao)
+                if hasattr(bal, "rao"):
+                    return float(bal.rao) / 1e9
+                raise
 
         for ls in liquidity_subnets:
             bt.logging.info(
@@ -113,14 +107,13 @@ class LiquidityFetcher:
                     )
 
                 tao_total = sum(_balance_to_tao(p.liquidity) for p in positions)
-                key = (coldkey, ls.netuid, block or 0)
-                aggregated[key] = tao_total
+                aggregated[(coldkey, ls.netuid, block or 0)] = tao_total
 
-        # 4️⃣  Persist new LiquiditySnapshot rows -------------------------
+        # 4️⃣  Persist LiquiditySnapshot rows (only tao_total > 0) --------
         new_snapshots: List[LiquiditySnapshot] = []
         with self.cache._session() as db:  # pylint: disable=protected-access
             for (ck, subnet, blk), tao_val in aggregated.items():
-                if tao_val == 0.0:
+                if tao_val <= 0.0:
                     continue
                 if not self._exists(db, ck, subnet, blk):
                     new_snapshots.append(
@@ -142,10 +135,20 @@ class LiquidityFetcher:
 
         # 5️⃣  Build liquidity map for RewardCalculator -------------------
         liq_map: Dict[int, Dict[int, float]] = defaultdict(dict)
+
         for (ck, subnet, _blk), tao_val in aggregated.items():
-            uid = self._coldkey_to_uid(ck, subnet)
-            if uid is not None:
-                liq_map[subnet][uid] = tao_val
+            if tao_val <= 0.0:
+                continue  # ignore empty entries
+
+            uid = self._ck_uid_cache.get((ck, subnet))
+            if uid is None:
+                continue  # coldkey not present on that subnet
+
+            liq_map[subnet][uid] = tao_val
+            bt.logging.debug(
+                f"[LiquidityFetcher] Liquidity map entry: subnet {subnet} "
+                f"uid {uid} → {tao_val:.9f} TAO"
+            )
 
         self.cache.liquidity = liq_map
         bt.logging.info(
@@ -186,7 +189,7 @@ class LiquidityFetcher:
             )
 
     # ------------------------------------------------------------------ #
-    # Coldkey→UID mapping ------------------------------------------------ #
+    # UID‑cache handling ------------------------------------------------ #
     # ------------------------------------------------------------------ #
     async def _populate_uid_cache(
         self,
@@ -195,35 +198,41 @@ class LiquidityFetcher:
         block: Optional[int],
     ) -> None:
         """
-        Ensure `_ck_uid_cache` contains all (coldkey, subnet) pairs present
-        in the freshly fetched liquidity data.
+        Make sure `_ck_uid_cache` includes every coldkey that appeared in
+        the freshly fetched liquidity results (keyed per subnet).
         """
         needed: Dict[int, set[str]] = defaultdict(set)
+
+        # Collect any (ck, subnet) not in cache yet
         for ls in liquidity_subnets:
             for ck in ls.coldkey_positions:
-                if (ck, ls.netuid) not in self._ck_uid_cache:
+                key = (ck, ls.netuid)
+                if key not in self._ck_uid_cache:
                     needed[ls.netuid].add(ck)
 
         if not needed:
-            return  # everything already cached
+            return  # cache already complete
+
+        bt.logging.info(
+            f"[LiquidityFetcher] Loading UID maps for subnets: {sorted(needed)}"
+        )
 
         async with AsyncSubtensor(network=settings.BITTENSOR_NETWORK) as subtensor:
-            for subnet_id, _missing in needed.items():
+            for subnet_id, coldkeys in needed.items():
                 try:
                     mg = await get_metagraph(
                         subnet_id, st=subtensor, lite=True, block=block
                     )
-                    # The metagraph’s coldkeys are in UID order
                     for uid, ck in zip(mg.uids, mg.coldkeys):
-                        self._ck_uid_cache[(str(ck), subnet_id)] = int(uid)
+                        if ck in coldkeys:
+                            self._ck_uid_cache[(str(ck), subnet_id)] = int(uid)
+                    bt.logging.debug(
+                        f"[LiquidityFetcher]   subnet {subnet_id}: "
+                        f"cached {len(coldkeys)} coldkeys"
+                    )
                 except Exception as e:  # noqa: BLE001
                     bt.logging.warning(
                         f"[LiquidityFetcher] Could not fetch metagraph {subnet_id}: {e}"
                     )
-
-    def _coldkey_to_uid(self, coldkey: str, subnet_id: int) -> Optional[int]:
-        """
-        Fast lookup from the local cache.  None is returned when the UID
-        is unknown – callers must handle that.
-        """
-        return self._ck_uid_cache.get((coldkey, subnet_id))
+                    for ck in coldkeys:
+                        self._ck_uid_cache[(ck, subnet_id)] = None
