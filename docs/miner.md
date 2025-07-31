@@ -26,7 +26,7 @@
 ### 3️⃣ **Reward Collection**
 
 - At the end of every **epoch** the subnet measures:
-  - 📊 **Your total liquidity** (USD value) in each eligible pool.
+  - 📊 **Your total liquidity** (TAO value) in each eligible pool.
   - ⚖️ **The weight** assigned to each pool by α‑Stake voting.
 - Rewards flow back to the **same hotkey** that owns your neuron
 

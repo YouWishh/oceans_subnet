@@ -12,8 +12,9 @@ import logging
 from collections import defaultdict
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
-import bittensor as bt                           # ← NEW logging
-from bittensor import AsyncSubtensor             # type: ignore
+import bittensor as bt                          # ← project‑wide logging shim
+from bittensor import AsyncSubtensor            # type: ignore
+from bittensor.utils.balance import Balance     # for type checks / conversion
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -31,6 +32,8 @@ class LiquidityFetcher:
     """
     Wraps the *async* helpers in `utils.liquidity_utils` with an async,
     validator‑friendly façade and transparent de‑duplication.
+
+    All amounts are denominated in **TAO** (not USD).
     """
 
     # ------------------------------------------------------------------ #
@@ -58,7 +61,7 @@ class LiquidityFetcher:
     ) -> List[LiquiditySnapshot]:
         """
         • Collect liquidity from chain (or injected stub)  
-        • Aggregate value per (wallet, subnet)  
+        • Aggregate TAO value per (wallet, subnet)  
         • Store only new (wallet, subnet, block) combinations  
         • Return the list of *persisted* snapshots
         """
@@ -82,35 +85,48 @@ class LiquidityFetcher:
             f"LiquiditySubnet objects"
         )
 
-        # 2️⃣  Flatten & aggregate USD value per wallet/subnet ------------
+        # 2️⃣  Flatten & aggregate **TAO** value per wallet/subnet ---------
         aggregated: Dict[Tuple[str, int, int], float] = {}
+
+        def _balance_to_tao(bal: Balance) -> float:
+            """
+            Extract the TAO float value from a Balance. Falls back to raw
+            numeric casting if either `.tao` or `.rao` is unavailable.
+            """
+            if hasattr(bal, "tao"):
+                return float(bal.tao)                     # type: ignore[arg-type]
+            if hasattr(bal, "rao"):
+                return float(bal.rao) / 1e9               # type: ignore[arg-type]
+            return float(bal)
+
         for ls in liquidity_subnets:
             bt.logging.info(
                 f"[LiquidityFetcher] Subnet {ls.netuid} → "
                 f"{ls.unique_coldkeys} coldkeys, {ls.total_positions} positions"
             )
             for coldkey, positions in ls.coldkey_positions.items():
-                usd_total = sum(
-                    getattr(p, "usd_value", 0.0)
-                    or getattr(p, "usd", 0.0)
-                    or getattr(p, "value", 0.0)
-                    for p in positions
-                )
+                # Verbose listing of every position for this coldkey
+                for pos in positions:
+                    bt.logging.debug(
+                        f"[LiquidityFetcher]     {coldkey[:6]}… position: {pos}"
+                    )
+
+                tao_total = sum(_balance_to_tao(p.liquidity) for p in positions)
                 key = (coldkey, ls.netuid, block or 0)
-                aggregated[key] = usd_total
+                aggregated[key] = tao_total
 
         # 3️⃣  Convert to LiquiditySnapshot objects (dedup via DB) ---------
         new_snapshots: List[LiquiditySnapshot] = []
         with self.cache._session() as db:  # pylint: disable=protected-access
-            for (ck, subnet, blk), usd_val in aggregated.items():
-                if usd_val == 0.0:
+            for (ck, subnet, blk), tao_val in aggregated.items():
+                if tao_val == 0.0:
                     continue
                 if not self._exists(db, ck, subnet, blk):
                     new_snapshots.append(
                         LiquiditySnapshot(
                             wallet_hotkey=ck,
                             subnet_id=subnet,
-                            usd_value=usd_val,
+                            tao_value=tao_val,
                             block_height=blk,
                         )
                     )
@@ -125,10 +141,10 @@ class LiquidityFetcher:
 
         # 4️⃣  Build liquidity map for RewardCalculator --------------------
         liq_map: Dict[int, Dict[int, float]] = defaultdict(dict)
-        for (ck, subnet, _blk), usd_val in aggregated.items():
+        for (ck, subnet, _blk), tao_val in aggregated.items():
             uid = self._coldkey_to_uid(ck, subnet)  # implement as needed
             if uid is not None:
-                liq_map[subnet][uid] = usd_val
+                liq_map[subnet][uid] = tao_val
 
         self.cache.liquidity = liq_map
         bt.logging.info(

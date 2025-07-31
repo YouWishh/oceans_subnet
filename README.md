@@ -34,7 +34,7 @@ Oceans is on a mission to transform bittensor pools into oceans. We will use bit
 ### Reward Factors:
 
 **📊 Liquidity Amount**  
-How much liquidity they provide to the pools, measured as the total value in USD of their positions
+How much liquidity they provide to the pools, measured as the total value in TAO of their positions
 
 **🎯 Pool Selection**  
 Whether the pools they supply were selected by the α-Stake voting of the holders

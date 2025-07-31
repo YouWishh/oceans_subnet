@@ -71,6 +71,8 @@ class VoteSnapshot(Base):
 class LiquiditySnapshot(Base):
     """
     Liquidity provided by one miner in one subnet at a given block.
+
+    All values are denominated in **TAO**.
     """
 
     __tablename__ = "liquidity_snapshots"
@@ -78,7 +80,7 @@ class LiquiditySnapshot(Base):
     id: int = Column(Integer, primary_key=True, index=True)
     wallet_hotkey: str = Column(String(64), nullable=False, index=True)
     subnet_id: int = Column(Integer, nullable=False, index=True)
-    usd_value: float = Column(Float, nullable=False)
+    tao_value: float = Column(Float, nullable=False)         # ← renamed
     block_height: int = Column(Integer, nullable=False, index=True)
     ts: _dt.datetime = Column(
         DateTime(timezone=True), default=_dt.datetime.utcnow, nullable=False, index=True
