@@ -38,7 +38,6 @@ _INACTIVE_SUBNETS: Set[int] = {
 
 # Subnets that currently have user‑supplied liquidity
 ENABLED_USER_LIQUIDITY: Set[int] = {10,27,36,51,73,85,87,97,102,104,106}
-ENABLED_USER_LIQUIDITY_COMPLETE: Set[int] = {10,27,36,51,73,85,87,97,102,104,106}
 
 # ── NEW LOGIC ────────────────────────────────────────────────────────────
 # Active subnets are **only** those with user liquidity.  The legacy
