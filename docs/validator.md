@@ -31,6 +31,8 @@ chmod +x scripts/validator/setup.sh
 # Activate Python environment
 source validator_env/bin/activate
 
+pip install -e .
+
 # Start validator with PM2
 pm2 start neurons/validator.py --name oceans_validator -- \
   --netuid 66 \
