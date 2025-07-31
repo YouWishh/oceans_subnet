@@ -116,6 +116,10 @@ class LiquidityFetcher:
                 if tao_val <= 0.0:
                     continue
                 if not self._exists(db, ck, subnet, blk):
+                    bt.logging.debug(
+                        f"[LiquidityFetcher] New snapshot: {ck[:6]}… "
+                        f"subnet {subnet} blk {blk} → {tao_val:.9f} TAO"
+                    )
                     new_snapshots.append(
                         LiquiditySnapshot(
                             wallet_hotkey=ck,
