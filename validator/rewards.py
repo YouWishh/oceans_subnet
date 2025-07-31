@@ -59,6 +59,9 @@ class RewardCalculator:
                 continue
 
             lp_by_key = liquidity.get(subnet_id, {})
+            bt.logging.debug(
+                f"[RewardCalc]lp_by_key{lp_by_key}"
+            )
             total_lp = sum(lp_by_key.values())
 
             bt.logging.debug(
