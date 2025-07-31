@@ -24,7 +24,7 @@ from utils.liquidity_utils import (
     LiquiditySubnet,
     fetch_subnet_liquidity_positions,
 )
-from utils.subnet_utils import get_metagraph 
+from utils.subnet_utils import get_metagraph     # ← used for the UID lookup
 
 log = logging.getLogger("validator.liquidity_fetcher")
 

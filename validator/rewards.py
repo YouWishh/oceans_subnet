@@ -1,21 +1,17 @@
 """
-Reward‑calculator v2 — stake‑aware
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Reward‑calculator v3  —  stake‑aware + liquidity‑aware
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The economic formula now derives a **master subnet‑weight vector** that is
-*explicitly weighted by each voter’s α‑stake* and then combines that with
-miners’ liquidity snapshots.
-
-For every active miner **N**:
+Implements
 
     Reward(N) = Σ_subnets  ( LP_N,sub / Σ LP_all,sub ) × MasterWeight_sub
 
 where
 
-    MasterWeight_sub  = Σ_voters ( voter_stake × voter_weight_sub ) / Σ_voter_stake
+    MasterWeight_sub = Σ_voters ( voter_stake × voter_weight_sub ) / Σ_voter_stake
 
-The resulting mapping **uid → reward** is normalised so that Σ = 1.0 and can
-be pushed directly on‑chain.
+The mapping **uid → reward** is normalised so that Σ = 1.0 and can be
+pushed directly on‑chain.
 """
 from __future__ import annotations
 
@@ -32,12 +28,15 @@ class RewardCalculator:
 
     Expected `StateCache` attributes
     --------------------------------
-    • `latest_votes` – *List[VoteSnapshot]* \
-      Each snapshot **must** expose `.voter_stake` (float) and \
-      `.weights` (dict {subnet_id: weight})
+    • `latest_votes` – *List[VoteSnapshot]*  
+      Each snapshot **must** expose `.voter_stake` (float) and
+      `.weights` (dict {subnet_id: weight})
 
-    • `liquidity` – *Dict[int, Dict[int, float]]* \
-      Nested mapping **subnet_id → { uid → lp_amount }**
+    • `liquidity` – *Dict[int, Dict[Any, float]]*  
+      Nested mapping **subnet_id → { uid_or_key → lp_amount }**
+
+      The inner keys may be ints (UIDs) *or* strings.  They are coerced to
+      `int` where possible; non‑convertible keys are ignored.
     """
 
     def __init__(self, cache: StateCache):
@@ -52,44 +51,74 @@ class RewardCalculator:
         """
         uids: List[int] = list(getattr(metagraph, "uids", []))
         if not uids:
+            bt.logging.warning("[RewardCalc] Metagraph contained no UIDs")
             return {}
 
-        # 1️⃣  Build stake‑weighted master subnet vector -------------------
+        # 1️⃣  Build stake‑weighted master subnet vector -----------------
         master_w = self._build_master_vector()
+
         if not master_w:
             bt.logging.warning(
-                "[RewardCalc] Could not build master subnet vector – "
+                "[RewardCalc] Empty master‑weight vector – "
                 "falling back to uniform subnet weights"
             )
 
-        # 2️⃣  Obtain liquidity snapshots ---------------------------------
-        liquidity: Dict[int, Dict[int, float]] = getattr(self.cache, "liquidity", {})
+        # 2️⃣  Liquidity snapshots --------------------------------------
+        liquidity: Dict[int, Dict[object, float]] = getattr(
+            self.cache, "liquidity", {}
+        )
 
-        # 3️⃣  Compute miner rewards --------------------------------------
-        rewards: Dict[int, float] = {int(uid): 0.0 for uid in uids}
+        # 3️⃣  Compute rewards exactly as per formula -------------------
+        rewards: Dict[int, float] = defaultdict(float)
 
-        for subnet_id, w_sn in master_w.items():
-            if w_sn <= 0.0:
+        for subnet_id, w_sub in master_w.items():
+            if w_sub <= 0.0:
+                bt.logging.debug(
+                    f"[RewardCalc] Subnet {subnet_id}: master weight <=0 – skipped"
+                )
                 continue
 
-            lp_by_uid = liquidity.get(subnet_id, {})
-            total_lp = sum(lp_by_uid.values())
+            lp_by_key = liquidity.get(subnet_id, {})
+            total_lp = sum(lp_by_key.values())
+
+            bt.logging.debug(
+                f"[RewardCalc] Subnet {subnet_id}: total LP = {total_lp:.6f}, "
+                f"weight = {w_sub:.6f}"
+            )
+
             if total_lp <= 0.0:
-                continue  # no liquidity on this subnet
+                continue  # nothing staked on this subnet
 
-            factor = w_sn / total_lp
-            for uid in uids:
-                lp = lp_by_uid.get(int(uid), 0.0)
-                if lp:
-                    rewards[int(uid)] += lp * factor
+            inv_total_lp = 1.0 / total_lp
+            for key, lp_amt in lp_by_key.items():
+                try:
+                    uid = int(key)
+                except Exception:
+                    bt.logging.debug(
+                        f"[RewardCalc]    Ignoring non‑UID key “{key}” "
+                        f"for subnet {subnet_id}"
+                    )
+                    continue
 
-        # 4️⃣  Normalise (Σ = 1) or uniform fallback ----------------------
+                contrib = lp_amt * inv_total_lp * w_sub
+                if contrib > 0.0:
+                    rewards[uid] += contrib
+                    bt.logging.debug(
+                        f"[RewardCalc]    uid {uid:<4} +{contrib:.6f}"
+                    )
+
+        # 4️⃣  Normalise (Σ = 1) or uniform fallback --------------------
         total_reward = sum(rewards.values())
         if total_reward > 0:
-            rewards = {uid: r / total_reward for uid, r in rewards.items()}
+            norm = 1.0 / total_reward
+            rewards = {uid: r * norm for uid, r in rewards.items()}
+            bt.logging.info(
+                f"[RewardCalc] Rewards normalised (Σ = {sum(rewards.values()):.6f}, "
+                f"{len(rewards)} active miners)"
+            )
         else:
             bt.logging.warning(
-                "[RewardCalc] Reward vector zeroed – using uniform distribution"
+                "[RewardCalc] Reward vector zero – using uniform distribution"
             )
             uniform = 1.0 / len(uids)
             rewards = {int(uid): uniform for uid in uids}
@@ -106,9 +135,14 @@ class RewardCalculator:
         """
         votes = getattr(self.cache, "latest_votes", [])  # List[VoteSnapshot]
 
-        # Fallback to previous pipeline if votes are unavailable
+        # Fallback: use any cached “subnet_weights” if votes are unavailable
         if not votes:
-            return getattr(self.cache, "subnet_weights", {})
+            cached = getattr(self.cache, "subnet_weights", {})
+            if cached:
+                bt.logging.info(
+                    "[RewardCalc] Using cached subnet_weights (no fresh votes)"
+                )
+            return cached
 
         raw: Dict[int, float] = defaultdict(float)
         total_stake: float = 0.0
@@ -119,7 +153,7 @@ class RewardCalculator:
             if stake <= 0.0 or not weights:
                 continue
 
-            # Ensure each voter's weights sum to 1.0 (defensive)
+            # Defensive: ensure each voter’s weights sum to 1.0
             s = sum(weights.values())
             if s <= 0.0:
                 continue
@@ -137,7 +171,7 @@ class RewardCalculator:
         # Persist for visibility
         self.cache.master_subnet_weights = master_w
         bt.logging.info(
-            f"[RewardCalc] Master subnet vector built for {len(master_w)} subnets "
+            f"[RewardCalc] Master subnet vector: {len(master_w)} subnets "
             f"(Σ = {sum(master_w.values()):.6f})"
         )
         return master_w
