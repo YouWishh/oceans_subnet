@@ -1,5 +1,5 @@
 """
-Reward‑calculator v3.1  —  stake‑aware + liquidity‑aware
+Reward‑calculator v3.2  —  stake‑aware + liquidity‑aware
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Reward(N) = Σ_subnets  ( LP_N,sub / Σ LP_all,sub ) × MasterWeight_sub
@@ -30,23 +30,30 @@ class RewardCalculator:
     # PUBLIC
     # ------------------------------------------------------------------ #
     def compute(self, *, metagraph) -> Dict[int, float]:
+        # ------------------ 0. Prepare UID universe --------------------
         uids: List[int] = list(getattr(metagraph, "uids", []))
         if not uids:
             bt.logging.warning("[RewardCalc] Metagraph contained no UIDs")
             return {}
 
-        # 1️⃣  Master subnet vector --------------------------------------
+        # ------------------ 1. Master subnet vector --------------------
         master_w = self._build_master_vector()
 
-        # 2️⃣  Liquidity map --------------------------------------------
-        liquidity: Dict[int, Dict[object, float]] = getattr(
+        if not master_w:
+            bt.logging.warning(
+                "[RewardCalc] Master vector empty – all miners will be uniform"
+            )
+
+        # ------------------ 2. Liquidity map ---------------------------
+        liquidity: Dict[int, Dict[int, float]] = getattr(
             self.cache, "liquidity", {}
         )
 
-        # 3️⃣  Apply formula --------------------------------------------
+        # ------------------ 3. Apply formula ---------------------------
         rewards: Dict[int, float] = defaultdict(float)
 
         for raw_sid, w_sub in master_w.items():
+            # Key safety
             try:
                 subnet_id = int(raw_sid)
             except Exception:
@@ -56,45 +63,46 @@ class RewardCalculator:
                 continue
 
             if w_sub <= 0.0:
-                continue
+                continue  # this subnet contributes nothing
 
-            lp_by_key = liquidity.get(subnet_id, {})
-            bt.logging.debug(
-                f"[RewardCalc]lp_by_key{lp_by_key}"
-            )
-            total_lp = sum(lp_by_key.values())
+            lp_by_uid = liquidity.get(subnet_id, {})
+            total_lp = sum(lp_by_uid.values())
 
             bt.logging.debug(
-                f"[RewardCalc] Subnet {subnet_id}: total LP = {total_lp:.9f}, "
-                f"weight = {w_sub:.6f}"
+                f"[RewardCalc] Subnet {subnet_id}: total LP={total_lp:.9f}, "
+                f"weight={w_sub:.6f}"
             )
 
-            if total_lp == 0.0:
+            if total_lp <= 0.0:
+                # No liquidity yet — safe to skip
                 continue
 
             inv_total_lp = 1.0 / total_lp
-            for key, lp_amt in lp_by_key.items():
+            for uid, lp_amt in lp_by_uid.items():
+                # In case keys are str‐UIDs
                 try:
-                    uid = int(key)
+                    uid_int = int(uid)
                 except Exception:
                     bt.logging.debug(
-                        f"[RewardCalc]    Ignoring non‑UID key “{key}” "
-                        f"for subnet {subnet_id}"
+                        f"[RewardCalc]    Ignoring non‑UID key “{uid}” "
+                        f"on subnet {subnet_id}"
                     )
                     continue
 
-                contrib = lp_amt * inv_total_lp * w_sub
-                if contrib > 0:
-                    rewards[uid] += contrib
-                    bt.logging.debug(
-                        f"[RewardCalc]    uid {uid:<4} +{contrib:.9f}"
-                    )
+                if lp_amt <= 0.0:
+                    continue  # ignore zero positions
 
-        # 4️⃣  Normalise or fallback ------------------------------------
+                contrib = lp_amt * inv_total_lp * w_sub
+                rewards[uid_int] += contrib
+                bt.logging.debug(
+                    f"[RewardCalc]    uid {uid_int:<5} +{contrib:.9f}"
+                )
+
+        # ------------------ 4. Normalise or uniform fallback -----------
         ttl = sum(rewards.values())
         if ttl > 0.0:
-            norm = 1.0 / ttl
-            rewards = {uid: r * norm for uid, r in rewards.items()}
+            factor = 1.0 / ttl
+            rewards = {uid: r * factor for uid, r in rewards.items()}
             bt.logging.info(
                 f"[RewardCalc] Rewards normalised, {len(rewards)} active miners "
                 f"(Σ = {sum(rewards.values()):.6f})"
@@ -105,9 +113,10 @@ class RewardCalculator:
             )
             uniform = 1.0 / len(uids)
             rewards = {int(uid): uniform for uid in uids}
+
         bt.logging.debug(
-            f"[RewardCalc] Final rewards: {len(rewards)} miners rewards {rewards} "
-            f"(Σ = {sum(rewards.values()):.6f})"
+            f"[RewardCalc] Final rewards for {len(rewards)} miners – "
+            f"Σ = {sum(rewards.values()):.6f}"
         )
         return rewards
 
@@ -115,6 +124,10 @@ class RewardCalculator:
     # INTERNAL
     # ------------------------------------------------------------------ #
     def _build_master_vector(self) -> Dict[int, float]:
+        """
+        Returns { subnet_id: weight } where Σ weights = 1.0.
+        Falls back to cache.subnet_weights if no fresh votes are present.
+        """
         votes = getattr(self.cache, "latest_votes", [])
 
         if not votes:
@@ -143,7 +156,7 @@ class RewardCalculator:
 
             total_stake += stake
 
-        if total_stake == 0.0:
+        if total_stake <= 0.0:
             return {}
 
         master_w = {sid: w / total_stake for sid, w in raw.items()}
