@@ -139,15 +139,15 @@ class LiquidityFetcher:
 
         # 5️⃣  Build liquidity map for RewardCalculator -------------------
         liq_map: Dict[int, Dict[int, float]] = defaultdict(dict)
-
+        bt.logging.debug(f"Creating liquidity map")
         for (ck, subnet, _blk), tao_val in aggregated.items():
             if tao_val <= 0.0:
                 continue  # ignore empty entries
-
+            bt.logging.debug(f"Liquidity map -> tao_val: {tao_val:.9f} TAO for {ck[:6]}… on subnet {subnet}")
             uid = self._ck_uid_cache.get((ck, subnet))
             if uid is None:
                 continue  # coldkey not present on that subnet
-
+            bt.logging.debug(f"Liquidity map -> tao_val: {tao_val:.9f} TAO for {ck[:6]}… on subnet {subnet}")    
             liq_map[subnet][uid] = tao_val
             bt.logging.debug(
                 f"[LiquidityFetcher] Liquidity map entry: subnet {subnet} "
