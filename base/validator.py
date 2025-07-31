@@ -210,6 +210,9 @@ class BaseValidatorNeuron(BaseNeuron):
         )
 
         self.scores = alpha * scattered + (1.0 - alpha) * self.scores
+        bt.logging.debug(
+            f"Updated scores: {self.scores}, "
+        )
 
     def get_miner_uids(self, *, exclude: Optional[List[int]] = None) -> np.ndarray:
         """
