@@ -105,7 +105,10 @@ class RewardCalculator:
             )
             uniform = 1.0 / len(uids)
             rewards = {int(uid): uniform for uid in uids}
-
+        bt.logging.debug(
+            f"[RewardCalc] Final rewards: {len(rewards)} miners "
+            f"(Σ = {sum(rewards.values()):.6f})"
+        )
         return rewards
 
     # ------------------------------------------------------------------ #
