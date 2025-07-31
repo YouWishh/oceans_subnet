@@ -82,7 +82,7 @@ class EpochValidatorNeuron(BaseValidatorNeuron):
         # ––– Oceans components
         self.cache = StateCache()
         self.vote_fetcher = VoteFetcher(self.cache)
-        self.liq_fetcher = LiquidityFetcher(self.cache)
+        self.liq_fetcher = LiquidityFetcher(self.cache,primary_netuid=self.config.netuid)
         self.reward_calc = RewardCalculator(self.cache)
 
     # ---------------------------------------------------- #
