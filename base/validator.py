@@ -203,7 +203,7 @@ class BaseValidatorNeuron(BaseNeuron):
         scattered = np.zeros_like(self.scores)
         scattered[uids] = rewards
 
-        alpha = getattr(self.config.neuron, "moving_average_alpha", 0.1)
+        alpha = 0.1
         bt.logging.debug(
             f"Updating scores with alpha={alpha}, "
             f"rewards={rewards}, uids={uids}, scattered={scattered}, scores={self.scores}"
