@@ -44,5 +44,6 @@ async def forward(neuron) -> None:
     )
 
     # 5️⃣  Persist the scores on the neuron object -------------------------
-    bt.logging.info("[forward] Updating neuron's score table…")
+    bt.logging.info(f"[forward] Updating neuron's score table…")
+    bt.logging.debug(f"[forward] {boosted=}, {uids_np=}")
     neuron.update_scores(boosted, uids_np)
