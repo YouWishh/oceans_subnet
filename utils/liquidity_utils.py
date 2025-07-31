@@ -148,10 +148,20 @@ async def fetch_subnet_liquidity_positions(
                         reuse_block=block is None,
                     )
                     positions = positions or []
+
+                    # Always print the headline line …
                     bt.logging.debug(
                         f"[liquidity_utils] subnet {uid} coldkey {cold_ss58[:6]}… "
                         f"→ {len(positions)} positions"
                     )
+
+                    # … and, **only when positions exist**, print each one.
+                    if positions:
+                        for p in positions:
+                            bt.logging.debug(
+                                f"[liquidity_utils] subnet {uid} coldkey {cold_ss58[:6]}…     {p}"
+                            )
+
                     return cold_ss58, positions
                 except Exception as err:  # noqa: BLE001
                     logger.warning(
