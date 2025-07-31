@@ -38,7 +38,10 @@ class RewardCalculator:
 
         # ------------------ 1. Master subnet vector --------------------
         master_w = self._build_master_vector()
-
+        bt.logging.debug(
+            f"[RewardCalc] Master vector: {len(master_w)} subnets, {master_w} "
+            f"(Σ = {sum(master_w.values()):.6f})"
+        )
         if not master_w:
             bt.logging.warning(
                 "[RewardCalc] Master vector empty – all miners will be uniform"
@@ -162,7 +165,7 @@ class RewardCalculator:
         master_w = {sid: w / total_stake for sid, w in raw.items()}
         self.cache.master_subnet_weights = master_w
         bt.logging.info(
-            f"[RewardCalc] Master subnet vector: {len(master_w)} subnets "
+            f"[RewardCalc] Master subnet vector: {len(master_w)} subnets, {master_w} "
             f"(Σ = {sum(master_w.values()):.6f})"
         )
         return master_w
