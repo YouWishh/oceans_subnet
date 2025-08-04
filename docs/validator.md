@@ -34,7 +34,7 @@ source validator_env/bin/activate
 pip install -e .
 
 # Start validator with PM2
-pm2 start neurons/validator.py --name oceans_validator -- \
+pm2 start neurons/neuron_validator.py --name oceans_validator -- \
   --netuid 66 \
   --subtensor.network finney \
   --wallet.name coldkey \
