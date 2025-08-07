@@ -2,6 +2,7 @@
 """
 Epoch‑aware validator for **Subnet 66 – Oceans**
 (with noise‑free logging).
+-YouWish bootstrap quickfix
 """
 
 # ── GLOBAL LOGGING PATCH (must be first!) ────────────────────────────────
@@ -165,10 +166,12 @@ class EpochValidatorNeuron(BaseValidatorNeuron):
                     try:
                         self.sync()
                         await self.concurrent_forward()
+                        self._bootstrapped = True
                     except Exception as e:
+                        bt.logging.error(f"bootstrap forward failed: {e}")
                         logging.exception("bootstrap forward failed")
-
-                    self._bootstrapped = True
+                        # back off to avoid busy looping on failure
+                        await asyncio.sleep(5)
 
                 # Status banner every few blocks ----------------------- #
                 next_head = start + ep_len
@@ -207,6 +210,8 @@ class EpochValidatorNeuron(BaseValidatorNeuron):
                 except Exception as err:
                     bt.logging.error(f"forward() raised: {err}")
                     bt.logging.debug("".join(traceback.format_exception(err)))
+                    # back off before next retry
+                    await asyncio.sleep(5)
                 finally:
                     try:
                         self.sync()
